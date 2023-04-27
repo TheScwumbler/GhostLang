@@ -6,8 +6,6 @@
 #define INIT_TOKEN_BUF_SIZE 16
 #define LEX_ITER_BUF_SIZE 32
 
-#define MAX_NODE_CHILDREN 3
-
 #undef EOF
 
 // there is a lot of unnecessary allocation
@@ -177,6 +175,7 @@ Token* token(TokenType type, void* data, int len, Span span) {
 typedef struct _TokenBuf {
     // token array
     Token** tokens;
+    int cur;
 
     int len;
     int cap;
@@ -189,6 +188,7 @@ TokenBuf* token_buf() {
 
     tb->len = 0;
     tb->cap = INIT_TOKEN_BUF_SIZE;
+    tb->cur = 0;
 
     tb->tokens = malloc(tok_sized(tb->cap));
 
@@ -718,41 +718,32 @@ int main(int argc, char** argv) {
         args.usingstdout = 1;
     }
 
-    // depending on inputs and outputs, decide what to do next
+    // actual run loop
+    while (1) {
+        LexIter* l;
 
-    // if we are using stdin, set up input loop
-    if (args.usingstdin) {
-        while(1) {
-            LexIter* l = prompt("> ");
-            TokenBuf* tb = lex(l);
-            free_lex_iter(l);
-            AST* ast = parse(tb);
-            free_token_buf(tb);
-            // interpret ast
-            // free ast
-
-            // print result
-            fprintf(out, "no result currently - using stdout");
+        // if using file, read file into lexiter
+        // otherwise prompt the user
+        if (!args.usingstdin) {
+            l = lex_iter("", 0);
+            for (char c = fgetc(in); c != '\0'; c = fgetc(in)) lex_iter_buf_append(l, &c, 1);
+        } else {
+            l = prompt("> ");
         }
-        exit(1);
-    } else {
-        // not using stdin
-        // create lexiter from file
-        LexIter* l = lex_iter("", 0);
-        
-        // read file into lexiter
-        for (char c = fgetc(in); c != '\0'; c = fgetc(in)) lex_iter_buf_append(l, &c, 1);
 
-        // turn lexiter into token buf
         TokenBuf* tb = lex(l);
         free_lex_iter(l);
         AST* ast = parse(tb);
         free_token_buf(tb);
-        // compile ast
+        // interpret ast
         // free ast
-
         // print output
-        fprintf(out, "no result yet - reading from file");
+
+        // if we are taking input from user, keep looping
+        // otherwise we have to exit
+        if (!args.usingstdin) {
+            exit(1);
+        }
     }
 
     return 0;
