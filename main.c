@@ -208,17 +208,17 @@ void free_token_buf(TokenBuf* tb) {
     free(tb);
 }
 
-void print_token(Token* t) {
-    printf(
+void print_token(Token* t, FILE* out) {
+    fprintf(out,
         "Tok {type: %i, data: %s, len: %i, fdata: %f span: %i -> %i, slen: %i}\n",
         t->type, (char*)t->data, t->len, t->fdata, t->span.start, t->span.end, span_len(t->span)
     );
 }
 
-void print_token_buf_verbose(TokenBuf* tb) {
+void print_token_buf_verbose(TokenBuf* tb, FILE* out) {
     for (int i = 0; i < tb->len; i++) {
-        printf("%i. ", i + 1);
-        print_token(tb->tokens[i]);
+        fprintf(out, "%i. ", i + 1);
+        print_token(tb->tokens[i], out);
     }
 }
 
@@ -469,6 +469,9 @@ TokenBuf* lex(LexIter* l) {
         }
     }
 
+    // add EOF
+    tok_append(tb, token(EOF, NULL, 0, span(l->len + 1, l->len + 1)));
+
     return tb;
 }
 
@@ -505,28 +508,21 @@ struct _Node {
     struct Node** children;
     int child_count;
 
-    void* data;
-    int len;
+    Token* data;
 
     Token* op;
 };
 typedef struct _Node Node;
 typedef struct _Node AST;
 
-Node* node(NodeType type, int children, Token* op, void* data, int len) {
+Node* node(NodeType type, int children, Token* op, Token* data) {
     Node* n = malloc(sizeof(Node));
 
     n->type = type;
     n->child_count = children;
     n->op = op;
 
-    n->len = len;
-
-    if (len > 0) {
-        // not sure if data is allocated, memcpy it to the node
-        n->data = malloc(len);
-        memcpy(n->data, data, len);
-    }
+    n->data = data;
 
     n->children = malloc(sizeof(Node*) * n->child_count);
 
@@ -534,7 +530,7 @@ Node* node(NodeType type, int children, Token* op, void* data, int len) {
 }
 
 Node* binopnode(Node* child1, Node* child2, Token* op) {
-    Node* n = node(BinOp, 2, op, NULL, 0);
+    Node* n = node(BinOp, 2, op, NULL);
 
     n->children[0] = child1;
     n->children[1] = child2;
@@ -543,15 +539,15 @@ Node* binopnode(Node* child1, Node* child2, Token* op) {
 }
 
 Node* unopnode(Node* child, Token* op) {
-    Node* n = node(UnOp, 1, op, NULL, 0);
+    Node* n = node(UnOp, 1, op, NULL);
 
     n->children[0] = child;
 
     return n;
 }
 
-Node* valnode(void* data, int len) {
-    Node* n = node(Value, 0, NULL, data, len);
+Node* valnode(Token* data) {
+    Node* n = node(Value, 0, NULL, data);
 
     return n;
 }
@@ -577,6 +573,11 @@ Token* peek(TokenBuf* tb) {
     return tb->tokens[tb->cur + 1];
 }
 
+// grab next token and step tokenbuf
+Token* advance(TokenBuf* tb) {
+    return tb->tokens[++tb->cur];
+}
+
 // variadic args take what kind of token it can be
 // essentially peek()
 int nextis(TokenBuf* tb, int ct, ...) {
@@ -590,6 +591,7 @@ int nextis(TokenBuf* tb, int ct, ...) {
         curtype = va_arg(ptr, TokenType);
 
         if (type == curtype) {
+            va_end(ptr);
             return 1;
         }
     }
@@ -622,7 +624,7 @@ AST* parse(TokenBuf* tb) {
 Node* parse_expr(TokenBuf* tb) {
     Node* first = parse_term(tb);
 
-    // eat mult or div
+    // eat add or subtract
 
     // grab second node
 
@@ -631,12 +633,36 @@ Node* parse_expr(TokenBuf* tb) {
 
 // second highest
 Node* parse_term(TokenBuf* tb) {
-    // 
+    // grab factor
+    Node* first = parse_factor(tb);
+    Token* next = peek(tb);
+
+    // if we have unary operator
+    if (next->type == CARET || next->type == )
+
+    // if we have multiplication or division
 }
 
 // lowest tier
 Node* parse_factor(TokenBuf* tb) {
-    // 
+    Token* next = peek(tb);
+
+    // if we have an integer
+    if (next->type == INT || next->type == IDENT) {
+        return valnode(next);
+    }
+
+    // if we have a unary operator
+    if (next->type)
+
+    // if we have grouping
+    if (next->type == LPAR || next->type == LBRAC || next->type == LCBRAC || next->type == PIPE) {
+        advance(tb);
+        Node* expr_as_fact = parse_expr(tb);
+        eattok(tb, next->type);
+
+        return expr_as_fact;
+    }
 }
 
 // file stuff
@@ -645,8 +671,8 @@ int streq(char* one, char* two) {
     int len2;
 
     // grab length
-    for (len1 = 0; one[len1] != '\0'; len1++)
-    for (len2 = 0; two[len2] != '\0'; len2++)
+    for (len1 = 0; one[len1] != '\0'; len1++);
+    for (len2 = 0; two[len2] != '\0'; len2++);
     // strings cant be equal if the lengths arent
     if (len1 != len2) {
         return -1;
@@ -664,36 +690,39 @@ int streq(char* one, char* two) {
 
 int main(int argc, char** argv) {
 
-    FILE* in;
-    FILE* out;
+    FILE* in = NULL;
+    FILE* out = NULL;
 
     typedef struct _ARGS {
-        int o : 1;
-        int i : 1;
-        int args : 2;
-        int usingstdin : 1;
-        int usingstdout : 1;
+        int o : 2;
+        int i : 2;
+        int args : 3;
+        int usingstdin : 2;
+        int usingstdout : 2;
     } ARGS;
-
-    ARGS args = {0, 0, 0};
+    
+    ARGS args = {0, 0, 0, 0, 0};
     
     // parse arguments
     for (int i = 0; i < argc; i++) {
         char* arg = argv[i];
 
-        if (streq(arg, "-o")) {
+        if (i == 0) continue;
+
+        if (streq(arg, "-o") == 1) {
             // if we have alr gotten an output
             if (args.o > 0) {
                 fprintf(stderr, "Error: too many outputs");
                 exit(-1);
             }
-            args.o++;
+            args.o = 1;
         }
         // if o == 1, then this is the output file
         else if (args.o == 1) {
             out = fopen(arg, "w");
-            args.o++;
+            args.o = 2;
         } 
+
         // otherwise, this is the input file
         else {
             if (args.i > 0) {
@@ -718,6 +747,16 @@ int main(int argc, char** argv) {
         args.usingstdout = 1;
     }
 
+    // validate files
+    if (!args.usingstdin && in == NULL) {
+        fprintf(stderr, "Error: Invalid input file\n");
+        exit(-1);
+    }
+    if (out == NULL) {
+        fprintf(stderr, "Error: Invalid output file\n");
+        exit(-1);
+    }
+
     // actual run loop
     while (1) {
         LexIter* l;
@@ -726,18 +765,25 @@ int main(int argc, char** argv) {
         // otherwise prompt the user
         if (!args.usingstdin) {
             l = lex_iter("", 0);
-            for (char c = fgetc(in); c != '\0'; c = fgetc(in)) lex_iter_buf_append(l, &c, 1);
+            for (char c = fgetc(in); !feof(in); c = fgetc(in)) lex_iter_buf_append(l, &c, 1);
         } else {
             l = prompt("> ");
+
+            // get rid of the newline
+            l->len--;
         }
 
         TokenBuf* tb = lex(l);
         free_lex_iter(l);
         AST* ast = parse(tb);
-        free_token_buf(tb);
+        //free_token_buf(tb);
         // interpret ast
         // free ast
         // print output
+
+        // test output
+        print_token_buf_verbose(tb, out);
+        fflush(out);
 
         // if we are taking input from user, keep looping
         // otherwise we have to exit
